@@ -202,13 +202,6 @@ The Streamlit dashboard shows:
 - [ ] A/B routing experiments
 - [ ] Real-time budget alerts (PagerDuty/Slack)
 
-## Resume bullets
-
-- Built an OpenAI-compatible LLM gateway with multi-provider routing, semantic caching, and circuit breaker fallbacks
-- Implemented cost tracking, rate limiting, and PII-safe request logging with Prometheus metrics
-- Designed policy-based auto-routing balancing quality, latency, and cost across mock and live providers
-- Delivered evaluation pipeline measuring cache hit rate, p95 latency, and quality/cost tradeoffs across 32 prompt categories
-
 ## License
 
 MIT
