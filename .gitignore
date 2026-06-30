@@ -1,0 +1,21 @@
+.venv/
+.env
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+data/*.db
+data/*.db-journal
+data/circuit_state.json
+reports/*.json
+.DS_Store
+*.log
+.cache/
+models/
+
+# Local-only artifacts (not for GitHub)
+*.pdf
+RouteWise_Gateway_Chat_Transcript.pdf
+scripts/export_chat_pdf.py
+.cursor/
