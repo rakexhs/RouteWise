@@ -1,0 +1,32 @@
+{"id": "sum-01", "category": "summarization", "prompt": "Summarize the benefits of microservices in three bullet points.", "expected_keywords": ["microservices", "scalable", "deploy"]}
+{"id": "sum-02", "category": "summarization", "prompt": "Give a one-paragraph summary of how HTTPS works.", "expected_keywords": ["TLS", "encrypt", "certificate"]}
+{"id": "sum-03", "category": "summarization", "prompt": "Summarize agile software development principles briefly.", "expected_keywords": ["iterative", "collaboration", "feedback"]}
+{"id": "sum-04", "category": "summarization", "prompt": "Summarize the plot of Romeo and Juliet in two sentences.", "expected_keywords": ["Romeo", "Juliet", "tragedy"]}
+{"id": "sum-05", "category": "summarization", "prompt": "Summarize key differences between SQL and NoSQL databases.", "expected_keywords": ["relational", "schema", "flexible"]}
+{"id": "sum-06", "category": "summarization", "prompt": "Summarize what a load balancer does for web applications.", "expected_keywords": ["traffic", "servers", "availability"]}
+{"id": "cls-01", "category": "classification", "prompt": "Classify this sentiment as positive, negative, or neutral: 'The product works but shipping was slow.'", "expected_keywords": ["neutral", "mixed"]}
+{"id": "cls-02", "category": "classification", "prompt": "Is this email spam or not spam? 'Congratulations! You won a free cruise!'", "expected_keywords": ["spam"]}
+{"id": "cls-03", "category": "classification", "prompt": "Classify this support ticket priority: production database is down.", "expected_keywords": ["high", "critical", "urgent"]}
+{"id": "cls-04", "category": "classification", "prompt": "Categorize this text as technical, business, or personal: 'Q3 revenue grew 12% YoY.'", "expected_keywords": ["business"]}
+{"id": "cls-05", "category": "classification", "prompt": "Label this intent: user wants to reset password.", "expected_keywords": ["password", "reset", "account"]}
+{"id": "cls-06", "category": "classification", "prompt": "Classify programming language paradigm: Python is primarily what type?", "expected_keywords": ["multi-paradigm", "object-oriented"]}
+{"id": "code-01", "category": "coding_explanation", "prompt": "Explain what a Python decorator does with a simple example.", "expected_keywords": ["function", "wrap", "decorator"]}
+{"id": "code-02", "category": "coding_explanation", "prompt": "Explain the difference between == and === in JavaScript.", "expected_keywords": ["type", "equality", "coercion"]}
+{"id": "code-03", "category": "coding_explanation", "prompt": "Explain how recursion works in computing.", "expected_keywords": ["base case", "function", "calls itself"]}
+{"id": "code-04", "category": "coding_explanation", "prompt": "Explain what Big-O notation measures.", "expected_keywords": ["complexity", "growth", "algorithm"]}
+{"id": "code-05", "category": "coding_explanation", "prompt": "Explain the purpose of unit tests in software engineering.", "expected_keywords": ["test", "isolated", "regression"]}
+{"id": "code-06", "category": "coding_explanation", "prompt": "Explain async/await in Python briefly.", "expected_keywords": ["asynchronous", "await", "coroutine"]}
+{"id": "code-07", "category": "coding_explanation", "prompt": "What is a REST API endpoint and how is it used?", "expected_keywords": ["HTTP", "resource", "URL"]}
+{"id": "sup-01", "category": "support_question", "prompt": "How do I reset my API key in the dashboard?", "expected_keywords": ["settings", "API key", "regenerate"]}
+{"id": "sup-02", "category": "support_question", "prompt": "Why am I getting a 429 rate limit error?", "expected_keywords": ["rate limit", "requests", "quota"]}
+{"id": "sup-03", "category": "support_question", "prompt": "How can I export my usage logs?", "expected_keywords": ["export", "logs", "admin"]}
+{"id": "sup-04", "category": "support_question", "prompt": "My webhook is not firing. What should I check first?", "expected_keywords": ["endpoint", "URL", "logs"]}
+{"id": "sup-05", "category": "support_question", "prompt": "How do I upgrade my subscription plan?", "expected_keywords": ["billing", "plan", "upgrade"]}
+{"id": "sup-06", "category": "support_question", "prompt": "What does circuit breaker open state mean for my requests?", "expected_keywords": ["circuit", "failures", "fallback"]}
+{"id": "fact-01", "category": "factual_answer", "prompt": "What is the capital of France?", "expected_keywords": ["Paris"]}
+{"id": "fact-02", "category": "factual_answer", "prompt": "How many planets are in our solar system?", "expected_keywords": ["eight", "8"]}
+{"id": "fact-03", "category": "factual_answer", "prompt": "Who wrote the novel '1984'?", "expected_keywords": ["Orwell", "George"]}
+{"id": "fact-04", "category": "factual_answer", "prompt": "What does CPU stand for?", "expected_keywords": ["Central Processing Unit", "processor"]}
+{"id": "fact-05", "category": "factual_answer", "prompt": "What is the chemical symbol for water?", "expected_keywords": ["H2O"]}
+{"id": "fact-06", "category": "factual_answer", "prompt": "In what year did the first moon landing occur?", "expected_keywords": ["1969"]}
+{"id": "fact-07", "category": "factual_answer", "prompt": "What protocol does HTTP typically run over for secure connections?", "expected_keywords": ["TLS", "SSL", "HTTPS"]}
