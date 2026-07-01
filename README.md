@@ -1,6 +1,6 @@
 # RouteWise — OpenAI-Compatible Multi-Model LLM Gateway
 
-RouteWise is a **production-style AI infrastructure gateway**, not a chatbot. It sits in front of multiple LLM providers and adds routing, semantic caching, fallbacks, cost tracking, rate limiting, circuit breakers, PII redaction, and observability — all behind an OpenAI-compatible `/v1/chat/completions` API.
+RouteWise is a **production-style AI infrastructure gateway**, not a chatbot. It sits in front of multiple LLM providers and adds routing, semantic caching, fallbacks, cost tracking, rate limiting, circuit breakers, PII redaction, SSE streaming, and observability — all behind an OpenAI-compatible `/v1/chat/completions` API.
 
 ## What problem this solves
 
@@ -89,6 +89,27 @@ curl -X POST http://localhost:8000/v1/chat/completions \
   }'
 ```
 
+### Streaming
+
+```bash
+# Server-sent events, OpenAI chunk format; final chunk carries usage,
+# route_reason, cache_status, and trace_id, followed by data: [DONE]
+curl -N -X POST http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: demo-key-change-me" \
+  -d '{
+    "model": "auto",
+    "messages": [{"role": "user", "content": "Summarize REST APIs in one sentence."}],
+    "stream": true
+  }'
+```
+
+Streamed responses go through the same routing, caching, rate limiting, and
+PII pipeline as regular ones: cache hits stream from memory, completed streams
+are cached and logged, and providers that fail before their first token fall
+through the fallback chain. Ollama and OpenAI stream natively; other providers
+fall back to chunked delivery of a full completion.
+
 ### Cache warm (repeat same prompt)
 
 ```bash
@@ -164,6 +185,25 @@ Metrics: cost per 1K requests, p50/p95 latency, cache hit rate, fallback rate, q
 
 Run: `make eval` (gateway must be running).
 
+## Performance
+
+Sustained 60-second load test on a laptop (M-series, mock providers, fresh
+database, unique prompts so nothing is served from cache):
+
+| Concurrency | Requests | Errors | Throughput | p50 | p95 | p99 |
+|-------------|----------|--------|------------|-----|-----|-----|
+| 10 | 14,581 | 0 | 242.7 req/s | 55 ms | 91 ms | 117 ms |
+
+This measures gateway overhead — routing, cache lookup, rate-limit checks,
+PII scan, and request logging — not model inference. Full details and
+reproduction steps in [reports/benchmark_results.md](reports/benchmark_results.md).
+
+Getting here required an actual fix: under concurrent load the original
+gateway deadlocked at ~20 in-flight requests because synchronous SQLAlchemy
+calls inside async handlers exhausted the default connection pool while
+blocking the event loop. The storage layer now uses `NullPool` for SQLite
+(with WAL enabled) and all DB work runs in the threadpool.
+
 ## Dashboard
 
 The Streamlit dashboard shows:
@@ -185,7 +225,7 @@ The Streamlit dashboard shows:
 
 ## Limitations
 
-- Streaming (`stream: true`) not supported in v1
+- Anthropic streaming uses chunked delivery of a full completion (native SSE passthrough only for Ollama/OpenAI)
 - Semantic cache uses in-memory embeddings by default (Redis optional for exact cache/rate limits)
 - Quality evaluation uses a deterministic rubric, not an LLM judge
 - Mock providers simulate latency/quality, not real inference
