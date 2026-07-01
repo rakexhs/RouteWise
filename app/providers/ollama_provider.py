@@ -1,3 +1,6 @@
+import json
+from collections.abc import AsyncIterator
+
 import httpx
 
 from app.config import get_settings
@@ -39,6 +42,30 @@ class OllamaProvider(BaseProvider):
             model=self.model_id,
             raw=data,
         )
+
+    async def stream(
+        self, messages: list[dict[str, str]], temperature: float = 0.2
+    ) -> AsyncIterator[str]:
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "stream": True,
+            "options": {"temperature": temperature},
+        }
+        async with httpx.AsyncClient(timeout=120.0, trust_env=False) as client:
+            async with client.stream(
+                "POST", f"{self.base_url}/api/chat", json=payload
+            ) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line.strip():
+                        continue
+                    data = json.loads(line)
+                    if data.get("done"):
+                        break
+                    delta = data.get("message", {}).get("content", "")
+                    if delta:
+                        yield delta
 
     async def health_check(self) -> bool:
         if not self.base_url:

@@ -1,9 +1,11 @@
+import json
 import time
 import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Query
-from fastapi.responses import PlainTextResponse
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from prometheus_client import generate_latest
 from sqlalchemy.orm import Session
 
@@ -19,7 +21,9 @@ from app.gateway.router import (
     decide_route,
     execute_with_fallback,
     prompt_hash,
+    stream_with_fallback,
 )
+from app.gateway.token_counter import count_messages_tokens, count_tokens
 from app.providers import ProviderRegistry
 from app.schemas import (
     ChatCompletionRequest,
@@ -83,9 +87,6 @@ async def chat_completions(
     api_key: str = Depends(verify_api_key),
     session: Session = Depends(get_db),
 ):
-    if request.stream:
-        raise HTTPException(status_code=400, detail="Streaming not supported in v1")
-
     rate_limiter.check(api_key)
     trace_id = new_trace_id()
     start = time.perf_counter()
@@ -97,14 +98,32 @@ async def chat_completions(
     cache_key = prompt_hash(redacted_messages, request.model)
 
     cache_result = cache_manager.lookup(prompt_text, cache_key)
-    route_decision = decide_route(
-        model=request.model,
-        messages=redacted_messages,
-        registry=registry,
-        session=session,
+    # decide_route reads spend totals from the database; keep that blocking
+    # work in the threadpool so concurrent requests can't stall the event loop.
+    route_decision = await run_in_threadpool(
+        lambda: decide_route(
+            model=request.model,
+            messages=redacted_messages,
+            registry=registry,
+            session=session,
+        )
     )
 
     feature = request.metadata.get("feature") if request.metadata else None
+
+    if request.stream:
+        return _streaming_response(
+            request=request,
+            session=session,
+            trace_id=trace_id,
+            start=start,
+            redacted_messages=redacted_messages,
+            prompt_text=prompt_text,
+            cache_key=cache_key,
+            cache_result=cache_result,
+            route_decision=route_decision,
+            feature=feature,
+        )
     error_msg = None
     cache_confidence = cache_result.confidence
     used_fallback = False
@@ -178,21 +197,23 @@ async def chat_completions(
         cache_confidence=cache_confidence,
     )
 
-    log_request(
-        session,
-        trace_id=trace_id,
-        model_requested=request.model,
-        model_used=model_used,
-        route_reason=response.route_reason,
-        cache_status=cache_status,
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
-        estimated_cost=cost,
-        latency_ms=latency_ms,
-        feature=feature,
-        provider=provider.name,
-        redacted_prompt_hash=prompt_hash(redacted_messages),
-        error=error_msg,
+    await run_in_threadpool(
+        lambda: log_request(
+            session,
+            trace_id=trace_id,
+            model_requested=request.model,
+            model_used=model_used,
+            route_reason=response.route_reason,
+            cache_status=cache_status,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            estimated_cost=cost,
+            latency_ms=latency_ms,
+            feature=feature,
+            provider=provider.name,
+            redacted_prompt_hash=prompt_hash(redacted_messages),
+            error=error_msg,
+        )
     )
 
     record_request(
@@ -205,8 +226,8 @@ async def chat_completions(
         estimated_cost=cost,
     )
 
-    daily_remaining = settings.daily_budget_usd - get_daily_spend(session)
-    set_budget_remaining(max(0.0, daily_remaining))
+    daily_spend = await run_in_threadpool(get_daily_spend, session)
+    set_budget_remaining(max(0.0, settings.daily_budget_usd - daily_spend))
 
     log_with_trace(
         trace_id,
@@ -215,6 +236,173 @@ async def chat_completions(
     )
 
     return response
+
+
+def _sse_chunk(
+    completion_id: str,
+    created: int,
+    model: str,
+    delta: dict,
+    finish_reason: str | None = None,
+    extra: dict | None = None,
+) -> str:
+    payload = {
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+    }
+    if extra:
+        payload.update(extra)
+    return f"data: {json.dumps(payload)}\n\n"
+
+
+def _streaming_response(
+    *,
+    request: ChatCompletionRequest,
+    session: Session,
+    trace_id: str,
+    start: float,
+    redacted_messages: list[dict[str, str]],
+    prompt_text: str,
+    cache_key: str,
+    cache_result,
+    route_decision,
+    feature: str | None,
+) -> StreamingResponse:
+    async def event_stream():
+        completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+        created = int(time.time())
+        parts: list[str] = []
+        error_msg = None
+        used_fallback = False
+
+        if cache_result.hit and cache_result.value:
+            result_data = cache_result.value
+            model_used = result_data.get("model", route_decision.model_id)
+            content = result_data["content"]
+            prompt_tokens = int(result_data.get("prompt_tokens", 0))
+            completion_tokens = int(result_data.get("completion_tokens", 0))
+            route_reason = result_data.get("route_reason", route_decision.route_reason)
+            cache_status = cache_result.cache_status
+
+            yield _sse_chunk(completion_id, created, model_used, {"role": "assistant"})
+            for i in range(0, len(content), 48):
+                yield _sse_chunk(
+                    completion_id, created, model_used, {"content": content[i : i + 48]}
+                )
+        else:
+            cache_status = "miss"
+            try:
+                deltas, model_used, route_reason, used_fallback = await stream_with_fallback(
+                    registry,
+                    route_decision.model_id,
+                    redacted_messages,
+                    request.temperature,
+                    circuit_breaker,
+                )
+            except Exception as exc:
+                log_with_trace(trace_id, "error", f"Stream request failed: {exc}")
+                yield f"data: {json.dumps({'error': {'message': 'All providers failed', 'type': 'provider_error'}})}\n\n"
+                return
+
+            yield _sse_chunk(completion_id, created, model_used, {"role": "assistant"})
+            try:
+                async for delta in deltas:
+                    parts.append(delta)
+                    yield _sse_chunk(completion_id, created, model_used, {"content": delta})
+            except Exception as exc:
+                error_msg = str(exc)
+                log_with_trace(trace_id, "error", f"Stream interrupted: {error_msg}")
+                yield f"data: {json.dumps({'error': {'message': 'Stream interrupted', 'type': 'provider_error'}})}\n\n"
+
+            content = "".join(parts)
+            # Streaming providers don't report usage, so estimate with the
+            # same tokenizer used for routing.
+            prompt_tokens = count_messages_tokens(redacted_messages)
+            completion_tokens = count_tokens(content) if content else 0
+
+            if not error_msg and content:
+                cache_manager.store(
+                    prompt_text,
+                    cache_key,
+                    {
+                        "content": content,
+                        "model": model_used,
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                        "route_reason": route_reason,
+                    },
+                    metadata={"model": model_used, "route_reason": route_reason},
+                )
+
+        provider = registry.get(model_used) or registry.get("mock-small")
+        assert provider is not None
+        cost = estimate_cost(provider, prompt_tokens, completion_tokens)
+        latency_ms = (time.perf_counter() - start) * 1000
+        final_route_reason = route_reason if not used_fallback else f"fallback:{route_reason}"
+
+        if not error_msg:
+            yield _sse_chunk(
+                completion_id,
+                created,
+                model_used,
+                {},
+                finish_reason="stop",
+                extra={
+                    "usage": {
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                        "total_tokens": prompt_tokens + completion_tokens,
+                    },
+                    "route_reason": final_route_reason,
+                    "cache_status": cache_status,
+                    "estimated_cost": round(cost, 6),
+                    "trace_id": trace_id,
+                },
+            )
+            yield "data: [DONE]\n\n"
+
+        await run_in_threadpool(
+            lambda: log_request(
+                session,
+                trace_id=trace_id,
+                model_requested=request.model,
+                model_used=model_used,
+                route_reason=final_route_reason,
+                cache_status=cache_status,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                estimated_cost=cost,
+                latency_ms=latency_ms,
+                feature=feature,
+                provider=provider.name,
+                redacted_prompt_hash=prompt_hash(redacted_messages),
+                error=error_msg,
+            )
+        )
+        record_request(
+            model=model_used,
+            provider=provider.name,
+            cache_status=cache_status,
+            latency_seconds=latency_ms / 1000,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            estimated_cost=cost,
+        )
+        log_with_trace(
+            trace_id,
+            "info",
+            f"model={model_used} cache={cache_status} cost={cost:.6f} "
+            f"latency={latency_ms:.1f}ms stream=true",
+        )
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/metrics")

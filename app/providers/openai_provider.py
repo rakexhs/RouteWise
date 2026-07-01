@@ -1,3 +1,6 @@
+import json
+from collections.abc import AsyncIterator
+
 import httpx
 
 from app.config import get_settings
@@ -39,6 +42,38 @@ class OpenAIProvider(BaseProvider):
             model=self.model_id,
             raw=data,
         )
+
+    async def stream(
+        self, messages: list[dict[str, str]], temperature: float = 0.2
+    ) -> AsyncIterator[str]:
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": True,
+        }
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        async with httpx.AsyncClient(timeout=120.0, trust_env=False) as client:
+            async with client.stream(
+                "POST",
+                "https://api.openai.com/v1/chat/completions",
+                json=payload,
+                headers=headers,
+            ) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    chunk = line[len("data: "):]
+                    if chunk.strip() == "[DONE]":
+                        break
+                    data = json.loads(chunk)
+                    choices = data.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta", {}).get("content")
+                    if delta:
+                        yield delta
 
     async def health_check(self) -> bool:
         return bool(self.api_key)

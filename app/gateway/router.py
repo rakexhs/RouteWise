@@ -1,5 +1,6 @@
 import hashlib
 import re
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
 from app.config import get_settings
@@ -137,5 +138,61 @@ async def execute_with_fallback(
         except Exception as exc:
             last_error = exc
             breaker.record_failure(model_id)
+
+    raise RuntimeError(str(last_error) if last_error else "All providers failed")
+
+
+async def stream_with_fallback(
+    registry: ProviderRegistry,
+    primary_model: str,
+    messages: list[dict[str, str]],
+    temperature: float,
+    circuit_breaker,
+) -> tuple["AsyncIterator[str]", str, str, bool]:
+    """Streaming counterpart of execute_with_fallback.
+
+    A provider only counts as healthy once it produces its first delta, so
+    failures before any output arrive fall through to the next provider in the
+    chain. Once streaming has started we are committed: mid-stream errors
+    propagate to the caller because partial output has already been sent.
+    """
+    from app.gateway.circuit_breaker import CircuitBreaker
+    from app.telemetry.metrics import record_fallback
+
+    breaker: CircuitBreaker = circuit_breaker
+    chain = registry.fallback_chain(primary_model)
+    last_error: Exception | None = None
+
+    for i, model_id in enumerate(chain):
+        provider = registry.get(model_id)
+        if not provider:
+            continue
+        if not breaker.can_execute(model_id):
+            continue
+
+        deltas = provider.stream(messages, temperature)
+        first: str | None = None
+        try:
+            first = await deltas.__anext__()
+        except StopAsyncIteration:
+            first = None
+        except Exception as exc:
+            last_error = exc
+            breaker.record_failure(model_id)
+            continue
+
+        breaker.record_success(model_id)
+        used_fallback = i > 0
+        if used_fallback:
+            record_fallback(primary_model, model_id)
+        reason = primary_model if model_id == primary_model else f"fallback_from_{primary_model}"
+
+        async def _replay(head: str | None = first, tail=deltas) -> "AsyncIterator[str]":
+            if head is not None:
+                yield head
+            async for delta in tail:
+                yield delta
+
+        return _replay(), model_id, reason, used_fallback
 
     raise RuntimeError(str(last_error) if last_error else "All providers failed")

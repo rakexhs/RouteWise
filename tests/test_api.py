@@ -98,7 +98,7 @@ def test_admin_costs(client):
     assert "daily_spend" in resp.json()
 
 
-def test_stream_rejected(client):
+def test_stream_returns_sse(client):
     resp = client.post(
         "/v1/chat/completions",
         headers=HEADERS,
@@ -108,4 +108,5 @@ def test_stream_rejected(client):
             "stream": True,
         },
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
