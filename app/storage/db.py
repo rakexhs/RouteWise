@@ -2,8 +2,9 @@ import os
 from collections.abc import Generator
 from datetime import datetime, timedelta
 
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import create_engine, event, func, select
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import NullPool, StaticPool
 
 from app.config import get_settings
 from app.schemas import CostBreakdown, RequestLogItem
@@ -23,10 +24,26 @@ def get_engine():
     if _engine is None:
         _ensure_data_dir()
         settings = get_settings()
-        connect_args = {}
-        if settings.database_url.startswith("sqlite"):
-            connect_args["check_same_thread"] = False
-        _engine = create_engine(settings.database_url, connect_args=connect_args)
+        url = settings.database_url
+        kwargs = {}
+        if url.startswith("sqlite"):
+            # The default QueuePool caps out at 15 connections; under load the
+            # event loop ends up waiting on connections that only blocked
+            # requests can release, deadlocking the gateway. SQLite connections
+            # are cheap, so skip pooling entirely for file-backed databases.
+            # In-memory databases need StaticPool: every new connection to
+            # :memory: would otherwise get a fresh, empty database.
+            kwargs["connect_args"] = {"check_same_thread": False, "timeout": 15}
+            kwargs["poolclass"] = StaticPool if ":memory:" in url else NullPool
+        _engine = create_engine(url, **kwargs)
+        if url.startswith("sqlite") and ":memory:" not in url:
+            @event.listens_for(_engine, "connect")
+            def _sqlite_pragmas(dbapi_conn, _record):
+                cursor = dbapi_conn.cursor()
+                cursor.execute("PRAGMA journal_mode=WAL")
+                cursor.execute("PRAGMA synchronous=NORMAL")
+                cursor.execute("PRAGMA busy_timeout=15000")
+                cursor.close()
     return _engine
 
 
